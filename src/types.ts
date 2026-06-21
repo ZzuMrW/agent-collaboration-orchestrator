@@ -3,6 +3,7 @@
  */
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
+export type PermissionRequestStatus = 'pending' | 'approved' | 'rejected';
 
 export interface Task {
   id: string;
@@ -22,6 +23,13 @@ export interface Task {
   error?: string;
   progress?: number;
   parentTaskId?: string;
+  executor?: {
+    command: string;
+    args: string[];
+    promptFile: string;
+    cwd: string;
+    exitCode?: number | null;
+  };
 }
 
 export interface TaskLog {
@@ -34,6 +42,7 @@ export interface TaskLog {
 export interface Artifact {
   path: string;
   type: 'file' | 'directory';
+  changeType?: 'created' | 'modified';
   size?: number;
   createdAt: string;
 }
@@ -49,6 +58,56 @@ export interface ResultReport {
     coverage?: number;
   };
   recommendations?: string[];
+}
+
+export interface PermissionRequest {
+  id: string;
+  taskId: string;
+  status: PermissionRequestStatus;
+  requestedSandbox: SandboxMode;
+  reason: string;
+  createdAt: string;
+  resolvedAt?: string;
+  resolutionNote?: string;
+  retryTaskId?: string;
+}
+
+export interface TaskSummary {
+  taskId: string;
+  title?: string;
+  status: TaskStatus;
+  projectRoot?: string;
+  sandbox?: SandboxMode;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  artifactCount: number;
+  pendingPermissionCount: number;
+  lastLog?: TaskLog;
+  error?: string;
+}
+
+export interface MobileDashboard {
+  generatedAt: string;
+  totals: {
+    all: number;
+    running: number;
+    pending: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+    pendingPermissions: number;
+  };
+  tasks: TaskSummary[];
+  permissionRequests: PermissionRequest[];
+}
+
+export interface ExecutorConfig {
+  command?: string;
+  argsTemplate?: string;
+  enabled: boolean;
+  defaultModel?: string;
+  timeoutMs: number;
 }
 
 export interface EnvironmentCheck {
@@ -106,4 +165,28 @@ export interface CancelTaskInput {
 
 export interface ListArtifactsInput {
   taskId: string;
+}
+
+export interface ListTasksInput {
+  status?: TaskStatus;
+  projectRoot?: string;
+  limit?: number;
+}
+
+export interface GetMobileDashboardInput {
+  projectRoot?: string;
+  limit?: number;
+}
+
+export interface ListPermissionRequestsInput {
+  status?: PermissionRequestStatus;
+  taskId?: string;
+}
+
+export interface ResolvePermissionRequestInput {
+  requestId: string;
+  decision: 'approve' | 'reject';
+  note?: string;
+  sandbox?: SandboxMode;
+  autoStart?: boolean;
 }

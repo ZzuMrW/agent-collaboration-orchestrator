@@ -8,8 +8,8 @@ import { McpBridgeServer } from './mcp-server';
 async function main(): Promise<void> {
   const sandboxRoot = process.env.SANDBOX_ROOT || process.cwd();
 
-  console.log(`Starting Agent Collaboration MCP Bridge Server...`);
-  console.log(`Sandbox root: ${sandboxRoot}`);
+  console.error('Starting Agent Collaboration MCP Bridge Server...');
+  console.error(`Sandbox root: ${sandboxRoot}`);
 
   const server = new McpBridgeServer(sandboxRoot);
 

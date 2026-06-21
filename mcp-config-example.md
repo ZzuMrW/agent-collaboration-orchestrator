@@ -1,229 +1,126 @@
-# MCP桥接服务配置示例
+# MCP Configuration Example
 
-本文件展示如何配置MCP桥接服务以支持Agent协作编排器。
+This project is intended to be configured in TRAE Work as an MCP server.
 
-## 配置文件示例
+TRAE receives the user's project-level instruction first. TRAE then analyzes the project, completes simple work directly, and delegates difficult subtasks to Codex through this bridge.
+
+## Basic Configuration
 
 ```json
 {
   "mcpServers": {
-    "agent-bridge": {
+    "codex-task-bridge": {
       "command": "node",
-      "args": ["path/to/bridge-server/dist/index.js"],
+      "args": [
+        "E:/codex_trae_workspace/agent-collaboration-orchestrator/dist/cli.js"
+      ],
       "env": {
-        "EXECUTOR_MODEL": "your-model-name",
-        "SANDBOX_ROOT": "/path/to/workspace"
+        "SANDBOX_ROOT": "E:/codex_trae_workspace",
+        "CODEX_EXECUTOR_COMMAND": "C:/path/to/codex.cmd",
+        "CODEX_EXECUTOR_ARGS": "exec --cd {projectRoot} --sandbox {sandbox} --ask-for-approval never -",
+        "EXECUTOR_TIMEOUT_MS": "1800000"
       }
     }
   }
 }
 ```
 
-## 环境变量说明
+## Environment Variables
 
-| 变量名 | 说明 | 是否必需 |
-|--------|------|----------|
-| `EXECUTOR_MODEL` | 执行层Agent使用的模型名称 | 是 |
-| `SANDBOX_ROOT` | 沙箱工作目录根路径 | 是 |
-| `LOG_LEVEL` | 日志级别（debug/info/warn/error） | 否，默认info |
+| Variable | Required | Description |
+| --- | --- | --- |
+| `SANDBOX_ROOT` | Recommended | Root directory Codex is allowed to work in. Prefer the shared `codex_trae_workspace`. |
+| `CODEX_EXECUTOR_COMMAND` | Required for auto execution | Command used to start Codex or your Codex relay script. On Windows, prefer `.cmd` or `.exe` over `.ps1`. |
+| `CODEX_EXECUTOR_ARGS` | Optional | Argument template for the command. By default the bridge sends the prompt through stdin. |
+| `EXECUTOR_MODEL` | Optional | Default model label written into the delegated prompt. |
+| `EXECUTOR_TIMEOUT_MS` | Optional | Timeout for a delegated Codex task. Defaults to 30 minutes. |
 
-## 接口实现规范
+## Argument Placeholders
 
-### submit_task
+| Placeholder | Description |
+| --- | --- |
+| `{taskId}` | Bridge task ID |
+| `{projectRoot}` | Project directory |
+| `{promptFile}` | Generated Codex prompt file |
+| `{sandbox}` | Requested sandbox mode |
+| `{model}` | Requested model |
+| `{title}` | Task title |
 
-提交任务给执行层Agent。
+## PowerShell Relay Example
 
-**输入参数：**
-```typescript
-interface SubmitTaskInput {
-  prompt: string;           // 任务描述（必需）
-  title?: string;          // 任务标题
-  model?: string;          // 指定模型
-  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';
-  autoStart?: boolean;     // 是否自动启动
-  constraints?: object;    // 约束条件
-  acceptanceCriteria?: object; // 验收标准
-  projectRoot?: string;    // 项目根目录
+If Codex must be started through a relay script:
+
+```json
+{
+  "CODEX_EXECUTOR_COMMAND": "powershell",
+  "CODEX_EXECUTOR_ARGS": "-File E:/scripts/run-codex-task.ps1 -Workspace {projectRoot} -PromptFile {promptFile} -Sandbox {sandbox}"
 }
 ```
 
-**返回值：**
-```typescript
-interface SubmitTaskOutput {
-  taskId: string;  // 任务唯一标识
-  status: 'pending' | 'running' | 'completed' | 'failed';
+## Manual Mode
+
+If `CODEX_EXECUTOR_COMMAND` is not set, `submit_task` still writes:
+
+```text
+<projectRoot>/.agent-bridge/tasks/<taskId>/prompt.md
+```
+
+The task remains `pending`. Copy that prompt into Codex manually, then let TRAE inspect the result.
+
+## Permission Approval
+
+TRAE cannot directly approve Codex CLI permission prompts from desktop or mobile. The MCP bridge starts Codex as a child process and can read logs/status, but it cannot click Codex's interactive approval UI.
+
+Recommended non-interactive mode:
+
+```json
+{
+  "CODEX_EXECUTOR_ARGS": "exec --cd {projectRoot} --sandbox workspace-write --ask-for-approval never -"
 }
 ```
 
-### get_task_status
+If Codex needs a command outside that policy, the task should fail and TRAE should inspect `get_task_log`, then submit a narrower `request_revision` or ask the user to handle the step manually on desktop.
 
-查询任务执行状态。
+Only use broader permissions, such as `--sandbox danger-full-access --ask-for-approval never`, when the whole workspace is externally sandboxed and trusted.
 
-**输入参数：**
-```typescript
-interface GetTaskStatusInput {
-  taskId: string;  // 任务ID（必需）
-}
+## TRAE Usage Pattern
+
+Recommended instruction for TRAE:
+
+```text
+First analyze the project and split the work. Complete simple tasks directly.
+For difficult implementation tasks, use the codex-task-bridge MCP tool submit_task.
+The delegated prompt must include project context, scope, constraints, acceptance criteria, and verification commands.
+After Codex finishes, inspect logs and results, review the diff, and request a revision if needed.
 ```
 
-**返回值：**
-```typescript
-interface TaskStatus {
-  taskId: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-  createdAt: string;
-  updatedAt: string;
-  progress?: number;  // 0-100
-  error?: string;     // 错误信息（如果失败）
-}
+## Shared Workspace Pattern
+
+Recommended layout:
+
+```text
+codex_trae_workspace/
+  agent-collaboration-orchestrator/
+  project-a/
+  project-b/
 ```
 
-### get_task_log
+Set `SANDBOX_ROOT` to `codex_trae_workspace`, then set each delegated task's `projectRoot` to the specific project folder.
 
-获取任务执行日志。
+## TRAE Skill
 
-**输入参数：**
-```typescript
-interface GetTaskLogInput {
-  taskId: string;     // 任务ID（必需）
-  maxChars?: number;  // 最大字符数
-}
+This repository includes a TRAE-oriented skill:
+
+```text
+skills/trae-codex-workspace/SKILL.md
 ```
 
-**返回值：**
-```typescript
-interface TaskLog {
-  taskId: string;
-  logs: Array<{
-    timestamp: string;
-    level: 'debug' | 'info' | 'warn' | 'error';
-    message: string;
-  }>;
-}
-```
+Install or copy `skills/trae-codex-workspace` into the skills directory supported by TRAE. The skill tells TRAE how to:
 
-### get_result_report
-
-获取任务完成报告。
-
-**输入参数：**
-```typescript
-interface GetResultReportInput {
-  taskId: string;  // 任务ID（必需）
-}
-```
-
-**返回值：**
-```typescript
-interface ResultReport {
-  taskId: string;
-  summary: string;
-  filesCreated: string[];
-  filesModified: string[];
-  testResults?: {
-    passed: number;
-    failed: number;
-    coverage?: number;
-  };
-  recommendations?: string[];
-}
-```
-
-### request_revision
-
-请求任务修订。
-
-**输入参数：**
-```typescript
-interface RequestRevisionInput {
-  taskId: string;        // 任务ID（必需）
-  revisionNotes: string; // 修订说明（必需）
-  model?: string;
-  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';
-  autoStart?: boolean;
-}
-```
-
-**返回值：**
-```typescript
-interface RevisionOutput {
-  newTaskId: string;
-  parentTaskId: string;
-  status: 'pending' | 'running';
-}
-```
-
-### cancel_task
-
-取消正在执行的任务。
-
-**输入参数：**
-```typescript
-interface CancelTaskInput {
-  taskId: string;  // 任务ID（必需）
-}
-```
-
-**返回值：**
-```typescript
-interface CancelTaskOutput {
-  taskId: string;
-  status: 'cancelled';
-  cancelledAt: string;
-}
-```
-
-### list_artifacts
-
-列出任务产生的文件。
-
-**输入参数：**
-```typescript
-interface ListArtifactsInput {
-  taskId: string;  // 任务ID（必需）
-}
-```
-
-**返回值：**
-```typescript
-interface ArtifactsList {
-  taskId: string;
-  artifacts: Array<{
-    path: string;
-    type: 'file' | 'directory';
-    size?: number;
-    createdAt: string;
-  }>;
-}
-```
-
-### diagnose_environment
-
-诊断环境配置。
-
-**输入参数：** 无
-
-**返回值：**
-```typescript
-interface EnvironmentDiagnosis {
-  status: 'healthy' | 'degraded' | 'error';
-  checks: Array<{
-    name: string;
-    status: 'pass' | 'fail' | 'warn';
-    message?: string;
-  }>;
-  environment: {
-    nodeVersion?: string;
-    platform: string;
-    sandboxRoot: string;
-  };
-}
-```
-
-## 安全建议
-
-1. **不要在代码中硬编码敏感信息**（如API密钥）
-2. 使用环境变量存储配置
-3. 限制沙箱访问权限
-4. 启用日志审计
-5. 定期检查和轮换凭证
+- start projects from desktop or mobile
+- split simple and difficult work
+- delegate difficult work to Codex through MCP
+- check progress
+- request revisions
+- cancel tasks
+- view artifacts

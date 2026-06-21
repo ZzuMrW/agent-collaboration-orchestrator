@@ -1,186 +1,180 @@
 ---
-name: agent-collaboration-orchestrator
-description: 多Agent协作编排器。编排层Agent负责项目框架设计和目标定义，执行层Agent负责代码实现。自动评估任务复杂度并分配工作。适用于需要跨Agent协作的开发任务。
+name: trae-codex-collaboration
+description: Coordinate TRAE Work as the primary project operator and Codex as the delegated executor for difficult implementation tasks through the agent-collaboration-orchestrator MCP bridge.
 ---
-# 多Agent协作编排器
 
-一个通用的多Agent协作框架，支持编排层Agent与执行层Agent的分工协作。
+# TRAE Calls Codex Collaboration
 
-## 核心原则
+Use this skill when TRAE Work is the first tool receiving the user's project instruction, and Codex is available through the MCP bridge for difficult subtasks.
 
-**编排层Agent（Orchestrator）负责：**
-- 项目整体架构设计
-- 功能模块划分与目标定义
-- 技术方案选型与约束条件
-- 接口规范和数据结构设计
-- 任务复杂度评估与分配
-- 代码审查与质量把控
+For TRAE installation, this repository also provides a dedicated skill at:
 
-**执行层Agent（Executor）负责：**
-- 具体代码实现
-- 单元测试编写
-- 代码分析与重构
-- 文档生成
-- Bug 修复
-
-## 任务复杂度评估
-
-在处理用户请求时，首先评估任务复杂度：
-
-### 简单任务（编排层直接执行）
-- 单文件创建/修改（< 50 行）
-- 配置文件调整
-- 简单查询/信息检索
-- 格式转换
-- 文档片段编写
-
-**处理方式：** 编排层直接执行，无需调用执行层。
-
-### 中等任务（编排层规划 + 执行层执行）
-- 多文件修改（2-5 个文件）
-- 功能模块实现（100-500 行）
-- API 接口开发
-- 数据处理脚本
-- 测试用例编写
-
-**处理方式：**
-1. 编排层设计模块结构、接口规范
-2. 提交详细任务给执行层执行
-3. 编排层审查执行层输出
-
-### 复杂任务（编排层架构 + 执行层多轮实现）
-- 新项目创建（完整框架）
-- 多模块系统开发
-- 复杂业务逻辑实现
-- 性能优化重构
-- 跨系统集成
-
-**处理方式：**
-1. 编排层构建项目整体架构
-2. 分解为多个子任务
-3. 逐个提交给执行层实现
-4. 编排层持续审查和调整
-
-## 工作流程
-
-### Phase 1: 任务评估
-```
-用户请求 → 复杂度评估 → 分工决策
+```text
+skills/trae-codex-workspace/SKILL.md
 ```
 
-### Phase 2: 编排层规划（中等/复杂任务）
-1. 分析需求，定义项目目标
-2. 设计整体架构和模块划分
-3. 制定接口规范和数据结构
-4. 编写任务分解计划
-5. 设定验收标准
+Use that skill inside TRAE when the workflow needs desktop/mobile progress control, project creation, cancellation, revisions, and artifact review.
 
-### Phase 3: 执行层执行
-使用任务提交接口提交任务：
-- 包含完整的设计规范
-- 明确的输入/输出要求
-- 具体的约束条件
-- 验收标准
+## Roles
 
-### Phase 4: 监控与审查
-1. 使用状态查询接口监控进度
-2. 使用日志查询接口查看执行详情
-3. 使用报告获取接口获取最终报告
-4. 编排层审查代码质量和架构一致性
+**TRAE Work is the primary operator.**
 
-### Phase 5: 反馈与迭代
-- 使用修订请求接口进行修改
-- 编排层调整架构设计
-- 执行层继续实现
+- Read the project first.
+- Understand the user request.
+- Produce the implementation plan and task split.
+- Handle simple changes directly.
+- Delegate difficult parts to Codex through MCP.
+- Review Codex results and integrate the final answer.
+- Support both desktop and mobile control: start tasks, check progress, revise, cancel, and view artifacts.
 
-## 任务提交格式
+**Codex is the delegated executor.**
 
-提交给执行层的任务应包含：
+- Receive a narrow, well-specified task from TRAE.
+- Implement difficult logic, complex refactors, or cross-file changes.
+- Keep edits scoped to the delegated task.
+- Report changed files, verification, and risks.
+
+## Delegation Rules
+
+TRAE should handle directly:
+
+- small single-file edits
+- simple config or documentation updates
+- straightforward UI text changes
+- obvious bug fixes with low blast radius
+
+TRAE should delegate to Codex:
+
+- complex implementation details
+- cross-module refactors
+- difficult debugging
+- test-heavy feature work
+- architecture-sensitive changes
+- tasks where a second coding agent improves confidence
+
+## Workflow
+
+1. TRAE locates or creates the project under `codex_trae_workspace`.
+2. TRAE reads the repository and summarizes the current structure.
+3. TRAE writes an implementation plan and splits tasks into simple and difficult parts.
+4. TRAE directly completes simple parts.
+5. TRAE calls `submit_task` for difficult parts.
+6. TRAE monitors Codex with `get_task_status` and `get_task_log`.
+7. TRAE reviews artifacts with `list_artifacts` and reads reports with `get_result_report`.
+8. If needed, TRAE calls `request_revision` with concrete correction notes.
+9. If the user stops or changes direction, TRAE calls `cancel_task`.
+10. TRAE gives the final user-facing answer.
+
+## MCP Tools
+
+### submit_task
+
+Use this to hand a difficult task to Codex.
+
+The prompt must include:
+
+- project context discovered by TRAE
+- exact task goal
+- files or directories in scope
+- files or behavior to avoid changing
+- implementation constraints
+- acceptance criteria
+- verification commands
+- expected completion report
+
+### get_task_status
+
+Check whether a Codex task is `pending`, `running`, `completed`, `failed`, or `cancelled`.
+
+### get_task_log
+
+Read Codex execution logs. Use this while waiting or when a task fails.
+
+### get_result_report
+
+Read the final Codex report after completion.
+
+### request_revision
+
+Ask Codex to revise a previous task. Notes must be specific and actionable.
+
+### cancel_task
+
+Cancel a task if the user changes direction or TRAE submitted the wrong scope.
+
+### diagnose_environment
+
+Use this when tasks remain pending, Codex does not start, or the bridge configuration looks wrong.
+
+## Codex Task Prompt Template
 
 ```markdown
-## 项目背景
-[编排层设计的整体架构概述]
+## Project Context
+[TRAE's brief analysis of the repository and relevant conventions.]
 
-## 任务目标
-[具体要实现的功能]
+## Delegated Task
+[The difficult part Codex should implement.]
 
-## 设计规范
-- 文件结构：[列出需要创建/修改的文件]
-- 接口定义：[API/函数签名]
-- 数据结构：[关键数据模型]
-- 约束条件：[技术限制、性能要求]
+## Scope
+- Prefer modifying: [...]
+- Do not modify: [...]
 
-## 验收标准
-- 功能完整性：[必须实现的功能]
-- 代码质量：[测试覆盖率、代码规范]
-- 文档要求：[需要生成的文档]
+## Requirements
+- [...]
+
+## Constraints
+- Preserve unrelated user changes.
+- Follow existing project style.
+- Keep the change focused on this delegated task.
+
+## Verification
+- Run: [...]
+- If a command cannot run, explain why.
+
+## Completion Report
+Please report:
+- files changed
+- commands/tests run
+- behavior implemented
+- unresolved risks
 ```
 
-## 审查要点
+## Example submit_task
 
-编排层审查执行层输出时检查：
-1. **架构一致性**：是否符合编排层设计的架构
-2. **接口规范**：是否遵循定义的接口
-3. **代码质量**：是否通过测试、符合规范
-4. **文档完整**：是否包含必要的文档
-5. **风险识别**：是否有潜在问题需要关注
+```json
+{
+  "prompt": "TRAE has analyzed the project. It is a Vite React app using Zustand for state. Please implement the difficult part: persistent undo/redo state for the canvas editor. Scope: src/store/canvas-store.ts and related tests only. Do not change routing or package manager. Run npm test -- canvas-store and report the result.",
+  "title": "Implement persistent canvas undo redo",
+  "sandbox": "workspace-write",
+  "constraints": {
+    "doNotChange": ["package.json", "src/router.tsx"],
+    "preferredFiles": ["src/store/canvas-store.ts", "src/store/canvas-store.test.ts"]
+  },
+  "acceptanceCriteria": {
+    "checks": [
+      "undo and redo preserve canvas state",
+      "state survives reload through existing persistence layer",
+      "related tests pass"
+    ]
+  }
+}
+```
 
-## 示例场景
+## Review Checklist For TRAE
 
-### 场景：创建 Web API 项目
+After Codex finishes, TRAE must check:
 
-**编排层工作：**
-1. 设计项目结构（controllers, services, models）
-2. 定义 API 路由和接口规范
-3. 制定数据模型和验证规则
-4. 分解为：路由配置、控制器实现、服务层、测试
+- Did Codex stay within scope?
+- Are unrelated files modified?
+- Does the result satisfy the acceptance criteria?
+- Did tests or type checks run?
+- Are logs or reports showing failures?
+- Is a revision needed?
 
-**执行层工作：**
-1. 实现具体路由配置
-2. 编写控制器逻辑
-3. 实现服务层业务逻辑
-4. 编写单元测试
+## Important Rules
 
-### 场景：代码重构
-
-**编排层工作：**
-1. 分析现有代码结构
-2. 设计重构目标架构
-3. 制定重构步骤和优先级
-4. 定义重构约束（不破坏现有功能）
-
-**执行层工作：**
-1. 按步骤执行重构
-2. 更新相关测试
-3. 生成重构报告
-
-## MCP工具接口规范
-
-本技能依赖一个MCP（Model Context Protocol）桥接服务，提供以下工具接口：
-
-| 工具 | 用途 | 参数说明 |
-|------|------|----------|
-| `submit_task` | 提交开发任务 | prompt(必需): 任务描述; title: 任务标题; model: 模型选择; sandbox: 沙箱模式; autoStart: 是否自动启动; constraints: 约束条件; acceptanceCriteria: 验收标准; projectRoot: 项目根目录 |
-| `get_task_status` | 监控任务执行状态 | taskId(必需): 任务ID |
-| `get_task_log` | 查看执行日志 | taskId(必需): 任务ID; maxChars: 最大字符数 |
-| `get_result_report` | 获取完成报告 | taskId(必需): 任务ID |
-| `request_revision` | 请求修改迭代 | taskId(必需): 任务ID; revisionNotes: 修订说明; model: 模型选择; sandbox: 沙箱模式; autoStart: 是否自动启动 |
-| `diagnose_environment` | 检查环境配置 | 无参数 |
-| `cancel_task` | 取消正在执行的任务 | taskId(必需): 任务ID |
-| `list_artifacts` | 查看任务产生的文件 | taskId(必需): 任务ID |
-
-### 沙箱模式说明
-
-| 模式 | 说明 |
-|------|------|
-| `read-only` | 只读模式，仅允许读取文件 |
-| `workspace-write` | 工作区写入模式，允许在工作区内创建和修改文件 |
-| `danger-full-access` | 完全访问模式，允许所有文件操作（谨慎使用） |
-
-## 注意事项
-
-1. **简单任务不调用执行层**：避免不必要的开销
-2. **设计先行**：编排层必须先完成架构设计再提交给执行层
-3. **分批提交**：复杂任务分解为多个中等任务
-4. **持续审查**：每个子任务完成后立即审查
-5. **保持一致性**：确保执行层输出符合编排层设计
+- TRAE remains responsible for the overall user request.
+- Codex should receive narrow tasks, not vague project-level instructions.
+- Do not delegate before TRAE has done a first pass over the project.
+- Do not place secrets in delegated prompts.
+- If no Codex executor command is configured, use the generated prompt file manually.

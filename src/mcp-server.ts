@@ -15,6 +15,10 @@ import {
   RequestRevisionInput,
   CancelTaskInput,
   ListArtifactsInput,
+  ListTasksInput,
+  GetMobileDashboardInput,
+  ListPermissionRequestsInput,
+  ResolvePermissionRequestInput,
 } from './types';
 
 /**
@@ -199,6 +203,95 @@ export class McpBridgeServer {
             },
           },
           {
+            name: 'list_tasks',
+            description: 'List task summaries for TRAE desktop/mobile progress views',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                status: {
+                  type: 'string',
+                  enum: ['pending', 'running', 'completed', 'failed', 'cancelled'],
+                  description: 'Optional task status filter',
+                },
+                projectRoot: {
+                  type: 'string',
+                  description: 'Optional project root filter',
+                },
+                limit: {
+                  type: 'number',
+                  description: 'Maximum number of tasks to return',
+                },
+              },
+            },
+          },
+          {
+            name: 'get_mobile_dashboard',
+            description: 'Get a compact dashboard with task counts, recent tasks, and pending permission requests',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                projectRoot: {
+                  type: 'string',
+                  description: 'Optional project root filter',
+                },
+                limit: {
+                  type: 'number',
+                  description: 'Maximum number of recent task summaries to return',
+                },
+              },
+            },
+          },
+          {
+            name: 'list_permission_requests',
+            description: 'List permission requests created after Codex fails due to sandbox or approval restrictions',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                status: {
+                  type: 'string',
+                  enum: ['pending', 'approved', 'rejected'],
+                  description: 'Optional permission request status filter',
+                },
+                taskId: {
+                  type: 'string',
+                  description: 'Optional task ID filter',
+                },
+              },
+            },
+          },
+          {
+            name: 'resolve_permission_request',
+            description: 'Approve or reject a pending permission request. Approval creates a retry task with the requested sandbox.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                requestId: {
+                  type: 'string',
+                  description: 'Permission request ID',
+                },
+                decision: {
+                  type: 'string',
+                  enum: ['approve', 'reject'],
+                  description: 'Whether to approve or reject the request',
+                },
+                note: {
+                  type: 'string',
+                  description: 'Optional approval or rejection note',
+                },
+                sandbox: {
+                  type: 'string',
+                  enum: ['read-only', 'workspace-write', 'danger-full-access'],
+                  description: 'Sandbox to use for the retry task when approving',
+                },
+                autoStart: {
+                  type: 'boolean',
+                  description: 'Whether the retry task should start immediately',
+                },
+              },
+              required: ['requestId', 'decision'],
+            },
+          },
+          {
             name: 'diagnose_environment',
             description: 'Check the MCP environment configuration',
             inputSchema: {
@@ -213,29 +306,42 @@ export class McpBridgeServer {
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
+      const toolArgs = this.getToolArgs(args);
 
       try {
         switch (name) {
           case 'submit_task':
-            return this.handleSubmitTask(args as SubmitTaskInput);
+            return this.handleSubmitTask(toolArgs as unknown as SubmitTaskInput);
 
           case 'get_task_status':
-            return this.handleGetTaskStatus(args as GetTaskStatusInput);
+            return this.handleGetTaskStatus(toolArgs as unknown as GetTaskStatusInput);
 
           case 'get_task_log':
-            return this.handleGetTaskLog(args as GetTaskLogInput);
+            return this.handleGetTaskLog(toolArgs as unknown as GetTaskLogInput);
 
           case 'get_result_report':
-            return this.handleGetResultReport(args as GetResultReportInput);
+            return this.handleGetResultReport(toolArgs as unknown as GetResultReportInput);
 
           case 'request_revision':
-            return this.handleRequestRevision(args as RequestRevisionInput);
+            return this.handleRequestRevision(toolArgs as unknown as RequestRevisionInput);
 
           case 'cancel_task':
-            return this.handleCancelTask(args as CancelTaskInput);
+            return this.handleCancelTask(toolArgs as unknown as CancelTaskInput);
 
           case 'list_artifacts':
-            return this.handleListArtifacts(args as ListArtifactsInput);
+            return this.handleListArtifacts(toolArgs as unknown as ListArtifactsInput);
+
+          case 'list_tasks':
+            return this.handleListTasks(toolArgs as unknown as ListTasksInput);
+
+          case 'get_mobile_dashboard':
+            return this.handleGetMobileDashboard(toolArgs as unknown as GetMobileDashboardInput);
+
+          case 'list_permission_requests':
+            return this.handleListPermissionRequests(toolArgs as unknown as ListPermissionRequestsInput);
+
+          case 'resolve_permission_request':
+            return this.handleResolvePermissionRequest(toolArgs as unknown as ResolvePermissionRequestInput);
 
           case 'diagnose_environment':
             return this.handleDiagnoseEnvironment();
@@ -250,6 +356,10 @@ export class McpBridgeServer {
         throw new McpError(ErrorCode.InternalError, `Error executing ${name}: ${error}`);
       }
     });
+  }
+
+  private getToolArgs(args: Record<string, unknown> | undefined): Record<string, unknown> {
+    return args || {};
   }
 
   /**
@@ -382,6 +492,57 @@ export class McpBridgeServer {
             taskId: input.taskId,
             artifacts,
           }, null, 2),
+        },
+      ],
+    };
+  }
+
+  private handleListTasks(input: ListTasksInput) {
+    const tasks = this.taskManager.listTasks(input);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ tasks }, null, 2),
+        },
+      ],
+    };
+  }
+
+  private handleGetMobileDashboard(input: GetMobileDashboardInput) {
+    const dashboard = this.taskManager.getMobileDashboard(input);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(dashboard, null, 2),
+        },
+      ],
+    };
+  }
+
+  private handleListPermissionRequests(input: ListPermissionRequestsInput) {
+    const permissionRequests = this.taskManager.listPermissionRequests(input);
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ permissionRequests }, null, 2),
+        },
+      ],
+    };
+  }
+
+  private handleResolvePermissionRequest(input: ResolvePermissionRequestInput) {
+    const permissionRequest = this.taskManager.resolvePermissionRequest(input);
+    if (!permissionRequest) {
+      throw new McpError(ErrorCode.InvalidParams, `Permission request not found or already resolved: ${input.requestId}`);
+    }
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(permissionRequest, null, 2),
         },
       ],
     };

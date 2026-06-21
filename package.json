@@ -1,7 +1,7 @@
 {
   "name": "agent-collaboration-orchestrator",
   "version": "1.0.0",
-  "description": "Multi-agent collaboration orchestrator with MCP bridge service",
+  "description": "MCP bridge for TRAE Work to delegate difficult coding tasks to Codex",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -19,6 +19,8 @@
     "agent",
     "orchestrator",
     "collaboration",
+    "trae",
+    "codex",
     "ai",
     "llm"
   ],
