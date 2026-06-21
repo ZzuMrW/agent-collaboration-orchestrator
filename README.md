@@ -1,6 +1,6 @@
 # Agent Collaboration Orchestrator
 
-一个通用的多Agent协作编排框架，支持编排层Agent与执行层Agent的分工协作。
+一个通用的多Agent协作编排框架，包含MCP桥接服务实现，支持编排层Agent与执行层Agent的分工协作。
 
 ## 概述
 
@@ -14,80 +14,139 @@
 - **清晰的责任边界**：编排层专注设计，执行层专注实现
 - **完整的审查流程**：支持多轮迭代和持续审查
 - **灵活的沙箱模式**：支持只读、工作区写入、完全访问三种模式
+- **内置MCP服务**：提供完整的Model Context Protocol实现
 
 ## 安装
 
-将 `SKILL.md` 文件放置到您的技能目录中：
+### NPM安装
 
-```
-your-project/
-└── skills/
-    └── agent-collaboration-orchestrator/
-        └── SKILL.md
+```bash
+npm install agent-collaboration-orchestrator
 ```
 
-## 依赖要求
+### 手动安装
 
-本技能需要配合一个MCP桥接服务使用，该服务需要实现以下接口：
+```bash
+git clone https://github.com/your-username/agent-collaboration-orchestrator.git
+cd agent-collaboration-orchestrator
+npm install
+npm run build
+```
 
-### 必需接口
+## 项目结构
 
-| 接口名称 | 功能描述 |
-|----------|----------|
-| `submit_task` | 提交任务给执行层Agent |
-| `get_task_status` | 查询任务执行状态 |
-| `get_task_log` | 获取任务执行日志 |
-| `get_result_report` | 获取任务完成报告 |
-| `request_revision` | 请求任务修订 |
-| `cancel_task` | 取消正在执行的任务 |
-| `list_artifacts` | 列出任务产生的文件 |
-| `diagnose_environment` | 诊断环境配置 |
+```
+agent-collaboration-orchestrator/
+├── src/
+│   ├── index.ts          # 主入口
+│   ├── cli.ts            # CLI启动器
+│   ├── mcp-server.ts     # MCP服务实现
+│   ├── task-manager.ts   # 任务管理器
+│   └── types.ts          # 类型定义
+├── dist/                 # 编译输出
+├── SKILL.md              # 技能定义文件
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+## MCP桥接服务
+
+### 启动服务
+
+```bash
+# 设置环境变量
+export SANDBOX_ROOT=/path/to/workspace
+
+# 启动服务
+npm start
+# 或
+node dist/cli.js
+```
+
+### MCP配置示例
+
+在您的MCP客户端配置中添加：
+
+```json
+{
+  "mcpServers": {
+    "agent-bridge": {
+      "command": "node",
+      "args": ["path/to/agent-collaboration-orchestrator/dist/cli.js"],
+      "env": {
+        "SANDBOX_ROOT": "/path/to/workspace"
+      }
+    }
+  }
+}
+```
+
+### 可用工具
+
+| 工具名称 | 功能描述 | 必需参数 |
+|----------|----------|----------|
+| `submit_task` | 提交任务给执行层Agent | prompt |
+| `get_task_status` | 查询任务执行状态 | taskId |
+| `get_task_log` | 获取任务执行日志 | taskId |
+| `get_result_report` | 获取任务完成报告 | taskId |
+| `request_revision` | 请求任务修订 | taskId, revisionNotes |
+| `cancel_task` | 取消正在执行的任务 | taskId |
+| `list_artifacts` | 列出任务产生的文件 | taskId |
+| `diagnose_environment` | 诊断环境配置 | 无 |
+
+### 沙箱模式
+
+| 模式 | 说明 |
+|------|------|
+| `read-only` | 只读模式，仅允许读取文件 |
+| `workspace-write` | 工作区写入模式（默认） |
+| `danger-full-access` | 完全访问模式（谨慎使用） |
 
 ## 使用方法
 
-### 1. 简单任务（编排层直接执行）
+### 作为NPM模块使用
 
-适用于：
-- 单文件创建/修改（< 50 行）
-- 配置文件调整
-- 简单查询/信息检索
+```typescript
+import { McpBridgeServer, TaskManager } from 'agent-collaboration-orchestrator';
 
-编排层直接处理，无需调用执行层。
+// 创建任务管理器
+const taskManager = new TaskManager('/path/to/workspace');
 
-### 2. 中等任务（编排层规划 + 执行层执行）
+// 提交任务
+const task = taskManager.submitTask({
+  prompt: '实现用户认证模块',
+  title: '认证模块开发',
+  sandbox: 'workspace-write',
+});
 
-适用于：
-- 多文件修改（2-5 个文件）
-- 功能模块实现（100-500 行）
-- API 接口开发
-
-```markdown
-## 项目背景
-实现用户认证模块
-
-## 任务目标
-创建JWT认证中间件
-
-## 设计规范
-- 文件结构：src/middleware/auth.ts
-- 接口定义：verifyToken(req, res, next)
-- 数据结构：{ userId: string, role: string }
-- 约束条件：使用jsonwebtoken库
-
-## 验收标准
-- 功能完整性：验证token、处理过期
-- 代码质量：单元测试覆盖率>80%
-- 文档要求：API使用文档
+// 查询状态
+const status = taskManager.getTaskStatus(task.id);
 ```
 
-### 3. 复杂任务（多轮协作）
+### 作为MCP服务使用
 
-适用于：
-- 新项目创建
-- 多模块系统开发
-- 跨系统集成
+通过MCP客户端调用工具：
 
-编排层先分解为多个子任务，再逐个提交执行层实现。
+```json
+// 提交任务
+{
+  "tool": "submit_task",
+  "arguments": {
+    "prompt": "实现用户认证模块",
+    "title": "认证模块开发",
+    "sandbox": "workspace-write"
+  }
+}
+
+// 查询状态
+{
+  "tool": "get_task_status",
+  "arguments": {
+    "taskId": "task-uuid"
+  }
+}
+```
 
 ## 任务复杂度评估标准
 
@@ -96,6 +155,27 @@ your-project/
 | 简单 | 1 | < 50 | 单一功能、无依赖 |
 | 中等 | 2-5 | 100-500 | 模块级功能、有依赖 |
 | 复杂 | > 5 | > 500 | 系统级功能、多模块 |
+
+## 任务提交格式
+
+```markdown
+## 项目背景
+[编排层设计的整体架构概述]
+
+## 任务目标
+[具体要实现的功能]
+
+## 设计规范
+- 文件结构：[列出需要创建/修改的文件]
+- 接口定义：[API/函数签名]
+- 数据结构：[关键数据模型]
+- 约束条件：[技术限制、性能要求]
+
+## 验收标准
+- 功能完整性：[必须实现的功能]
+- 代码质量：[测试覆盖率、代码规范]
+- 文档要求：[需要生成的文档]
+```
 
 ## 审查检查清单
 
@@ -135,6 +215,25 @@ your-project/
 1. 执行重构
 2. 更新测试
 3. 生成报告
+
+## 开发
+
+```bash
+# 安装依赖
+npm install
+
+# 构建
+npm run build
+
+# 开发模式
+npm run dev
+
+# 测试
+npm test
+
+# 代码检查
+npm run lint
+```
 
 ## 许可证
 
