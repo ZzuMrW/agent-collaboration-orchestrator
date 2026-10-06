@@ -50,6 +50,8 @@ export interface Artifact {
 export interface ResultReport {
   taskId: string;
   summary: string;
+  executorAgent?: string;
+  finalResponse?: string;
   filesCreated: string[];
   filesModified: string[];
   testResults?: {
@@ -103,6 +105,8 @@ export interface MobileDashboard {
 }
 
 export interface ExecutorConfig {
+  agent?: string;
+  orchestrator?: string;
   command?: string;
   argsTemplate?: string;
   enabled: boolean;

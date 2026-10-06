@@ -1,18 +1,47 @@
 # Agent Collaboration Orchestrator
 
-面向 **TRAE Work + Codex** 的多智能体协同开发桥接器。
+支持 **Codex 主导、TRAE CLI 执行**，也兼容原来的 TRAE 主导、Codex 执行方向。
 
-这个项目提供一个 MCP bridge 和一个 TRAE skill，让你可以在 TRAE Work 桌面端或移动端发起项目任务，由 TRAE 先做项目粗分析、方案规划和简单修改，再把困难实现、复杂重构、测试补全等子任务交给 Codex 执行。TRAE 可以继续查看 Codex 任务状态、日志、产物、权限请求，并在需要时调整、终止或批准重试。
+桥接器通过 MCP 接收任务，启动本地 CLI 子进程，在共享项目中修改代码，并返回状态、日志、文件清单和最终回复。它不会控制已有的桌面聊天窗口。
+
+## Codex 主导、TRAE 执行：Linux / WSL 安装
+
+要求 Node.js >= 18、已登录且支持 `exec` 的 TRAE CLI。Linux / WSL 下执行：
+
+```bash
+npm ci --allow-remote=all
+npm test
+node scripts/install-local.cjs
+```
+
+安装器默认使用 `$CODEX_HOME`（未设置时为 `~/.codex`），支持显式传入一个或多个 Codex 配置目录，例如（将 `<username>` 替换为自己的 Windows 用户目录名）：
+
+```bash
+node scripts/install-local.cjs "$HOME/.codex" "/mnt/c/Users/<username>/.codex"
+```
+
+安装内容：`~/.local/bin/trae-task-bridge` 启动脚本、`trae-task-bridge` MCP 配置和 `codex-trae-workspace` skill。添加配置前会备份，保留其他配置；存在不同的同名 skill 或 MCP 配置时停止，避免覆盖。默认 TRAE 路径为 `~/.local/bin/traex`；可用 `TRAE_EXECUTOR_COMMAND` 覆盖，`SANDBOX_ROOT` 可指定允许提交项目的根目录。Windows 桌面端必须使用 WSL 执行环境才能运行这个 Linux 启动脚本。
+
+重新打开 Codex 聊天（如未出现工具则重启 Codex），在目标项目中输入：
+
+```text
+使用 $codex-trae-workspace。
+由你负责分析、规划和验收，TRAE 负责实现。
+先查看项目当前状态，把任务限制在明确的文件范围内，
+通过 trae-task-bridge 提交任务，完成后审查 diff 和测试结果。
+```
+
+通用操作示例、验证结果和卸载方式见 [本地使用指南](docs/codex-trae-local.md)。原方向的安装流程保留在下文。
 
 ## Features
 
-- **TRAE 主导流程**：TRAE 作为项目第一入口，Codex 作为困难任务执行器。
+- **双向角色配置**：Codex 主导 / TRAE 执行，或 TRAE 主导 / Codex 执行。
 - **MCP 工具集**：提交任务、查看状态、读取日志、获取报告、查看产物、请求修订、取消任务。
 - **移动端友好**：提供 `get_mobile_dashboard`，便于 TRAE 移动端查看当前任务、产物数量和待处理权限请求。
 - **产物扫描**：Codex 执行结束后自动扫描项目新增/修改文件，并通过 `list_artifacts` 暴露给 TRAE。
 - **权限重试机制**：Codex 因沙箱/权限失败后，bridge 可生成权限请求；TRAE 批准后创建更高权限的重试任务。
 - **共享工作空间**：推荐统一使用 `codex_trae_workspace`，让桌面端、移动端、MCP bridge 和 Codex 看到一致路径。
-- **可手动接管**：未配置 Codex 自动执行命令时，bridge 仍会生成 prompt 文件，可手动交给 Codex。
+- **可手动接管**：未配置执行命令时，bridge 仍会生成 prompt 文件。
 
 ## 快速开始
 
@@ -72,7 +101,7 @@ Set-Content -Encoding UTF8 E:\codex_trae_workspace\mcp-test-project\README.md "#
       "env": {
         "SANDBOX_ROOT": "E:/codex_trae_workspace",
         "CODEX_EXECUTOR_COMMAND": "C:/path/to/codex.cmd",
-        "CODEX_EXECUTOR_ARGS": "exec --cd {projectRoot} --sandbox {sandbox} --ask-for-approval never -",
+        "CODEX_EXECUTOR_ARGS": "--ask-for-approval never exec --cd {projectRoot} --sandbox {sandbox} -",
         "EXECUTOR_TIMEOUT_MS": "1800000"
       }
     }
@@ -159,7 +188,7 @@ codex_trae_workspace/
 - `SANDBOX_ROOT` 指向整个 `codex_trae_workspace`
 - 每次提交任务时，`projectRoot` 指向具体项目目录，例如 `E:/codex_trae_workspace/my-app`
 
-这样可以限制 Codex 的可写范围，并让 TRAE 桌面端/移动端看到一致的任务和产物路径。
+这样可校验提交项目的路径，并让各客户端看到一致的任务和产物路径。实际命令权限由执行器的沙箱控制。
 
 ## Installation
 
@@ -191,7 +220,7 @@ npm run build
       "env": {
         "SANDBOX_ROOT": "E:/codex_trae_workspace",
         "CODEX_EXECUTOR_COMMAND": "C:/path/to/codex.cmd",
-        "CODEX_EXECUTOR_ARGS": "exec --cd {projectRoot} --sandbox {sandbox} --ask-for-approval never -",
+        "CODEX_EXECUTOR_ARGS": "--ask-for-approval never exec --cd {projectRoot} --sandbox {sandbox} -",
         "EXECUTOR_TIMEOUT_MS": "1800000"
       }
     }
@@ -206,6 +235,9 @@ Windows 用户建议把 `CODEX_EXECUTOR_COMMAND` 指向 `.cmd` 或 `.exe`，避�
 | Variable | Required | Description |
 | --- | --- | --- |
 | `SANDBOX_ROOT` | Recommended | Codex 允许访问的协同工作空间根目录。 |
+| `EXECUTOR_AGENT` / `ORCHESTRATOR_AGENT` | Optional | 执行者 / 主导者名称；默认 Codex / TRAE Work。 |
+| `EXECUTOR_COMMAND` / `EXECUTOR_ARGS` | Recommended | 通用执行命令和参数，优先于旧的 CODEX_EXECUTOR_*。 |
+| `BRIDGE_STATE_DIR` | Optional | 每个任务单独保存状态、日志、报告的目录；不设置时仅保存在内存中。 |
 | `CODEX_EXECUTOR_COMMAND` | Required for auto execution | Codex 执行入口，例如 `codex.cmd`、`codex.exe`、`node`、`powershell` 或自定义中转脚本。 |
 | `CODEX_EXECUTOR_ARGS` | Optional | Codex 启动参数模板。默认通过 stdin 传入 prompt。 |
 | `EXECUTOR_MODEL` | Optional | 默认模型名称，会写入任务 prompt 供执行器参考。 |
@@ -218,6 +250,7 @@ Windows 用户建议把 `CODEX_EXECUTOR_COMMAND` 指向 `.cmd` 或 `.exe`，避�
 | `{taskId}` | Bridge task ID |
 | `{projectRoot}` | 项目目录 |
 | `{promptFile}` | Bridge 生成的 prompt 文件 |
+| `{resultFile}` | 最终回复文件路径，配合 CLI --output-last-message 使用 |
 | `{sandbox}` | 沙箱模式：`read-only`、`workspace-write`、`danger-full-access` |
 | `{model}` | 模型名称 |
 | `{title}` | 任务标题 |
@@ -229,7 +262,7 @@ Windows 用户建议把 `CODEX_EXECUTOR_COMMAND` 指向 `.cmd` 或 `.exe`，避�
 ```json
 {
   "CODEX_EXECUTOR_COMMAND": "C:/path/to/codex.cmd",
-  "CODEX_EXECUTOR_ARGS": "exec --cd {projectRoot} --sandbox {sandbox} --ask-for-approval never -"
+  "CODEX_EXECUTOR_ARGS": "--ask-for-approval never exec --cd {projectRoot} --sandbox {sandbox} -"
 }
 ```
 
@@ -457,7 +490,7 @@ skills/
 
 ## Roadmap
 
-- 任务状态持久化，避免 MCP 进程重启后丢失内存状态。
+- 更完整的跨进程任务控制；当前可读取其他 bridge 进程的持久化状态，取消运行中的任务需在原聊天进行。
 - 更精细的权限请求解析，展示被阻止的命令。
 - 多 Codex profile / 多中转站配置。
 - 端到端测试夹具。

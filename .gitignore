@@ -36,3 +36,6 @@ coverage/
 
 # TypeScript
 *.tsbuildinfo
+# Local bridge task records and verification evidence
+.agent-bridge/
+.local-verification/

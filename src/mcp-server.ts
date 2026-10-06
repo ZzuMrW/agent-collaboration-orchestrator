@@ -37,6 +37,7 @@ export class McpBridgeServer {
         version: '1.0.0',
       },
       {
+        instructions: `The configured orchestrator is ${process.env.ORCHESTRATOR_AGENT || 'TRAE Work'} and the delegated executor is ${process.env.EXECUTOR_AGENT || 'Codex'}. Submit scoped tasks, monitor status, then review finalResponse and workspace diffs. Do not delegate back recursively. A successful process exit does not prove acceptance. Broader sandbox retries require explicit user authorization.`,
         capabilities: {
           tools: {},
         },
@@ -204,7 +205,7 @@ export class McpBridgeServer {
           },
           {
             name: 'list_tasks',
-            description: 'List task summaries for TRAE desktop/mobile progress views',
+            description: 'List task summaries for desktop/mobile progress views',
             inputSchema: {
               type: 'object',
               properties: {
@@ -243,7 +244,7 @@ export class McpBridgeServer {
           },
           {
             name: 'list_permission_requests',
-            description: 'List permission requests created after Codex fails due to sandbox or approval restrictions',
+            description: 'List permission requests created after the executor fails due to sandbox or approval restrictions',
             inputSchema: {
               type: 'object',
               properties: {
@@ -299,7 +300,15 @@ export class McpBridgeServer {
               properties: {},
             },
           },
-        ],
+        ].map(tool => {
+          const readOnly = !['submit_task', 'request_revision', 'cancel_task', 'resolve_permission_request'].includes(tool.name);
+          return { ...tool, annotations: {
+            readOnlyHint: readOnly,
+            destructiveHint: !readOnly,
+            idempotentHint: readOnly,
+            openWorldHint: !readOnly,
+          } };
+        }),
       };
     });
 
@@ -578,4 +587,9 @@ export class McpBridgeServer {
   getTaskManager(): TaskManager {
     return this.taskManager;
   }
+  async stop(): Promise<void> {
+    this.taskManager.shutdown();
+    await this.server.close();
+  }
+
 }

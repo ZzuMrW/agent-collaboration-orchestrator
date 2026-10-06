@@ -12,6 +12,15 @@ async function main(): Promise<void> {
   console.error(`Sandbox root: ${sandboxRoot}`);
 
   const server = new McpBridgeServer(sandboxRoot);
+  let stopping = false;
+  const stop = (): void => {
+    if (stopping) return;
+    stopping = true;
+    void server.stop().catch(error => console.error('Failed to stop bridge:', error));
+  };
+  process.once('SIGTERM', stop);
+  process.once('SIGINT', stop);
+  process.stdin.once('end', stop);
 
   try {
     await server.start();

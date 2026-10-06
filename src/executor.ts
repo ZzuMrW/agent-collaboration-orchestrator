@@ -29,7 +29,7 @@ export type TaskEventSink = {
   attachExecutor(taskId: string, executor: Task['executor']): void;
 };
 
-export class CodexExecutor {
+export class AgentExecutor {
   private readonly config: ExecutorConfig;
   private readonly running = new Map<string, ChildProcessWithoutNullStreams>();
 
@@ -37,15 +37,17 @@ export class CodexExecutor {
     this.config = config;
   }
 
-  static fromEnv(env: NodeJS.ProcessEnv = process.env): CodexExecutor {
-    const command = env.CODEX_EXECUTOR_COMMAND || env.EXECUTOR_COMMAND || env.CODEX_COMMAND;
+  static fromEnv(env: NodeJS.ProcessEnv = process.env): AgentExecutor {
+    const command = env.EXECUTOR_COMMAND || env.CODEX_EXECUTOR_COMMAND || env.CODEX_COMMAND;
     const argsTemplate =
-      env.CODEX_EXECUTOR_ARGS ||
       env.EXECUTOR_ARGS ||
-      'exec --cd {projectRoot} --sandbox {sandbox} --ask-for-approval never -';
+      env.CODEX_EXECUTOR_ARGS ||
+      '--ask-for-approval never exec --cd {projectRoot} --sandbox {sandbox} -';
     const timeoutMs = Number(env.EXECUTOR_TIMEOUT_MS || env.CODEX_EXECUTOR_TIMEOUT_MS || 30 * 60 * 1000);
 
-    return new CodexExecutor({
+    return new AgentExecutor({
+      agent: env.EXECUTOR_AGENT || 'Codex',
+      orchestrator: env.ORCHESTRATOR_AGENT || 'TRAE Work',
       command,
       argsTemplate,
       defaultModel: env.EXECUTOR_MODEL || env.CODEX_MODEL,
@@ -70,7 +72,7 @@ export class CodexExecutor {
     });
 
     if (!this.config.enabled || !this.config.command) {
-      sink.log(task.id, 'warn', 'No Codex executor command configured. Task is queued for manual execution.');
+      sink.log(task.id, 'warn', 'No executor command configured. Task is queued for manual execution.');
       sink.attachExecutor(task.id, {
         command: '',
         args: [],
@@ -81,13 +83,20 @@ export class CodexExecutor {
       return null;
     }
 
+    if (task.status === 'cancelled') return null;
     const args = this.expandArgs(task, promptFile, projectRoot);
+    if (task.model || this.config.defaultModel) {
+      if (!this.config.argsTemplate?.includes('{model}')) {
+        args.unshift('--model', task.model || this.config.defaultModel || '');
+      }
+    }
 
-    sink.log(task.id, 'info', `Starting Codex executor: ${this.config.command} ${args.join(' ')}`);
+    sink.log(task.id, 'info', `Starting ${this.config.agent || 'Codex'} executor: ${this.config.command} ${args.join(' ')}`);
 
     const child = spawn(this.config.command, args, {
       cwd: projectRoot,
       env: process.env,
+      detached: process.platform !== 'win32',
       shell: this.shouldUseShell(this.config.command),
     });
 
@@ -100,9 +109,11 @@ export class CodexExecutor {
       exitCode: null,
     });
 
+    let timedOut = false;
     const timeout = setTimeout(() => {
+      timedOut = true;
       sink.log(task.id, 'error', `Executor timed out after ${this.config.timeoutMs}ms`);
-      child.kill();
+      this.stopProcess(child);
     }, this.config.timeoutMs);
 
     child.stdout.on('data', (chunk: Buffer) => {
@@ -114,11 +125,8 @@ export class CodexExecutor {
     });
 
     child.stdin.on('error', (error) => {
-      sink.log(task.id, 'warn', `Failed to write prompt to Codex stdin: ${error.message}`);
+      sink.log(task.id, 'warn', `Failed to write prompt to executor stdin: ${error.message}`);
     });
-
-    child.stdin.write(await fs.readFile(promptFile, 'utf8'));
-    child.stdin.end();
 
     child.on('error', (error) => {
       clearTimeout(timeout);
@@ -137,11 +145,14 @@ export class CodexExecutor {
         exitCode: code,
       });
 
-      void this.finishRun(task, projectRoot, beforeSnapshot, promptFile, code, sink).catch((error) => {
+      void this.finishRun(task, projectRoot, beforeSnapshot, promptFile, code, sink, timedOut).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         sink.fail(task.id, `Failed to collect artifacts: ${message}`);
       });
     });
+
+    child.stdin.write(await fs.readFile(promptFile, 'utf8'));
+    child.stdin.end();
 
     return {
       command: this.config.command,
@@ -155,9 +166,24 @@ export class CodexExecutor {
   cancel(taskId: string): boolean {
     const child = this.running.get(taskId);
     if (!child) return false;
-    child.kill();
+    this.stopProcess(child);
     this.running.delete(taskId);
     return true;
+  }
+
+  private stopProcess(child: ChildProcessWithoutNullStreams): void {
+    const signal = (value: NodeJS.Signals): void => {
+      try {
+        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, value);
+        else child.kill(value);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      }
+    };
+    signal('SIGTERM');
+    const escalation = setTimeout(() => signal('SIGKILL'), 2000);
+    escalation.unref();
+    child.once('close', () => clearTimeout(escalation));
   }
 
   private async writePromptFile(task: Task, input: SubmitTaskInput, projectRoot: string): Promise<string> {
@@ -200,8 +226,9 @@ export class CodexExecutor {
 
   private contract(sandbox: SandboxMode): string {
     return [
-      '- TRAE Work is the primary operator and planner for the overall project request.',
-      '- Codex is being invoked as an executor for the difficult or implementation-heavy part of the work.',
+      `- ${this.config.orchestrator || 'TRAE Work'} is the primary operator and planner for the overall project request.`,
+      `- ${this.config.agent || 'Codex'} is being invoked as the delegated executor.`,
+      '- Do not delegate this task back to the orchestrator or invoke this bridge recursively.',
       '- Keep changes focused on the requested task.',
       '- Do not overwrite unrelated user changes.',
       `- Requested sandbox mode: ${sandbox}.`,
@@ -214,6 +241,7 @@ export class CodexExecutor {
     const replacements: Record<string, string> = {
       taskId: task.id,
       promptFile,
+      resultFile: path.join(path.dirname(promptFile), 'result.md'),
       projectRoot,
       sandbox: task.sandbox || 'workspace-write',
       model: task.model || this.config.defaultModel || '',
@@ -243,7 +271,8 @@ export class CodexExecutor {
     beforeSnapshot: FileSnapshot,
     promptFile: string,
     exitCode: number | null,
-    sink: TaskEventSink
+    sink: TaskEventSink,
+    timedOut: boolean = false
   ): Promise<void> {
     const changedArtifacts = await this.collectChangedArtifacts(projectRoot, beforeSnapshot, promptFile);
     for (const artifact of changedArtifacts) {
@@ -257,10 +286,25 @@ export class CodexExecutor {
       .filter((artifact) => artifact.changeType === 'modified')
       .map((artifact) => artifact.path);
 
+    if (task.status === 'cancelled') return;
+    if (timedOut) {
+      sink.fail(task.id, `Executor timed out after ${this.config.timeoutMs}ms`);
+      return;
+    }
     if (exitCode === 0) {
+      const resultFile = path.join(path.dirname(promptFile), 'result.md');
+      let finalResponse: string | undefined;
+      try {
+        finalResponse = await fs.readFile(resultFile, 'utf8');
+        sink.artifact(task.id, { path: resultFile, type: 'file', changeType: 'created', createdAt: new Date().toISOString() });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
       sink.complete(task.id, {
         taskId: task.id,
-        summary: 'Codex executor completed successfully. Review the workspace diff and task log for details.',
+        executorAgent: this.config.agent || 'Codex',
+        finalResponse,
+        summary: `${this.config.agent || 'Codex'} executor completed successfully. Review the workspace diff and task log for details.`,
         filesCreated,
         filesModified,
         recommendations: [
@@ -270,7 +314,7 @@ export class CodexExecutor {
       });
     } else {
       sink.log(task.id, 'warn', `Detected ${changedArtifacts.length} changed artifact(s) before failure.`);
-      sink.fail(task.id, `Codex executor exited with code ${exitCode}`);
+      sink.fail(task.id, `${this.config.agent || 'Codex'} executor exited with code ${exitCode}`);
     }
   }
 
@@ -367,3 +411,6 @@ export class CodexExecutor {
     return lower.endsWith('.cmd') || lower.endsWith('.bat');
   }
 }
+
+// Backward-compatible export for existing callers.
+export { AgentExecutor as CodexExecutor };

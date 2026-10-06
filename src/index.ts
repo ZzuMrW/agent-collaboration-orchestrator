@@ -5,5 +5,5 @@
 
 export { McpBridgeServer } from './mcp-server';
 export { TaskManager } from './task-manager';
-export { CodexExecutor } from './executor';
+export { AgentExecutor, CodexExecutor } from './executor';
 export * from './types';

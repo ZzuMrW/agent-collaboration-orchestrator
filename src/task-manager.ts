@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
-import { CodexExecutor, TaskEventSink } from './executor';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from 'fs';
+import { AgentExecutor, TaskEventSink } from './executor';
 import {
   Task,
   TaskStatus,
@@ -30,11 +31,57 @@ export class TaskManager {
   private taskReports: Map<string, ResultReport> = new Map();
   private permissionRequests: Map<string, PermissionRequest> = new Map();
   private sandboxRoot: string;
-  private executor: CodexExecutor;
+  private executor: AgentExecutor;
+  private stateDirectory?: string;
+  private ownedTasks = new Set<string>();
 
-  constructor(sandboxRoot: string = process.cwd(), executor: CodexExecutor = CodexExecutor.fromEnv()) {
+  constructor(sandboxRoot: string = process.cwd(), executor: AgentExecutor = AgentExecutor.fromEnv()) {
     this.sandboxRoot = path.resolve(sandboxRoot);
     this.executor = executor;
+    this.stateDirectory = process.env.BRIDGE_STATE_DIR;
+    this.restoreState();
+  }
+
+  private persistState(taskId: string): void {
+    if (!this.stateDirectory) return;
+    const task = this.tasks.get(taskId);
+    if (!task) return;
+    mkdirSync(this.stateDirectory, { recursive: true, mode: 0o700 });
+    const file = path.join(this.stateDirectory, `${taskId}.json`);
+    const temporary = `${file}.${process.pid}.tmp`;
+    writeFileSync(temporary, JSON.stringify({
+      ownerPid: process.pid, task, logs: this.taskLogs.get(taskId),
+      artifacts: this.taskArtifacts.get(taskId), report: this.taskReports.get(taskId),
+      permissions: [...this.permissionRequests.values()].filter(request => request.taskId === taskId),
+    }), { mode: 0o600 });
+    renameSync(temporary, file);
+  }
+
+  private restoreState(): void {
+    if (!this.stateDirectory || !existsSync(this.stateDirectory)) return;
+    for (const file of readdirSync(this.stateDirectory)) {
+      if (!file.endsWith('.json')) continue;
+      const state = JSON.parse(readFileSync(path.join(this.stateDirectory, file), 'utf8'));
+      const task: Task = state.task;
+      if (this.ownedTasks.has(task.id)) continue;
+      this.tasks.set(task.id, task);
+      this.taskLogs.set(task.id, state.logs || []);
+      this.taskArtifacts.set(task.id, state.artifacts || []);
+      if (state.report) this.taskReports.set(task.id, state.report);
+      for (const request of state.permissions || []) this.permissionRequests.set(request.id, request);
+      if (task.status === 'running') {
+        let ownerAlive = true;
+        try { process.kill(state.ownerPid, 0); }
+        catch (error) { ownerAlive = (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
+        if (!ownerAlive) {
+          task.status = 'failed';
+          task.error = 'Bridge restarted while task was running. Inspect workspace before retrying.';
+          task.completedAt = new Date().toISOString();
+          task.updatedAt = task.completedAt;
+          this.persistState(task.id);
+        }
+      }
+    }
   }
 
   /**
@@ -62,6 +109,7 @@ export class TaskManager {
     };
 
     this.tasks.set(taskId, task);
+    this.ownedTasks.add(taskId);
     this.taskLogs.set(taskId, []);
     this.taskArtifacts.set(taskId, []);
 
@@ -82,6 +130,7 @@ export class TaskManager {
    * Get task status
    */
   getTaskStatus(taskId: string): Task | null {
+    this.restoreState();
     return this.tasks.get(taskId) || null;
   }
 
@@ -89,20 +138,21 @@ export class TaskManager {
    * Get task logs
    */
   getTaskLogs(taskId: string, maxChars?: number): TaskLog[] {
+    this.restoreState();
     const logs = this.taskLogs.get(taskId) || [];
 
     if (maxChars) {
       let totalChars = 0;
       const truncatedLogs: TaskLog[] = [];
 
-      for (const log of logs) {
+      for (const log of [...logs].reverse()) {
         const logStr = JSON.stringify(log);
         if (totalChars + logStr.length > maxChars) break;
         totalChars += logStr.length;
         truncatedLogs.push(log);
       }
 
-      return truncatedLogs;
+      return truncatedLogs.reverse();
     }
 
     return logs;
@@ -112,6 +162,7 @@ export class TaskManager {
    * Get result report
    */
   getResultReport(taskId: string): ResultReport | null {
+    this.restoreState();
     return this.taskReports.get(taskId) || null;
   }
 
@@ -119,7 +170,7 @@ export class TaskManager {
    * Request revision for a task
    */
   requestRevision(input: RequestRevisionInput): Task | null {
-    const parentTask = this.tasks.get(input.taskId);
+    const parentTask = this.getTaskStatus(input.taskId);
     if (!parentTask) return null;
 
     const newTaskId = uuidv4();
@@ -143,6 +194,7 @@ export class TaskManager {
     };
 
     this.tasks.set(newTaskId, newTask);
+    this.ownedTasks.add(newTaskId);
     this.taskLogs.set(newTaskId, []);
     this.taskArtifacts.set(newTaskId, []);
 
@@ -168,9 +220,12 @@ export class TaskManager {
    * Cancel a task
    */
   cancelTask(taskId: string): Task | null {
-    const task = this.tasks.get(taskId);
+    const task = this.getTaskStatus(taskId);
     if (!task) return null;
 
+    if (task.status === 'running' && !this.ownedTasks.has(task.id)) {
+      throw new Error('Task is running in another bridge process; cancel it in the originating chat.');
+    }
     if (task.status !== 'running' && task.status !== 'pending') {
       return null;
     }
@@ -190,10 +245,12 @@ export class TaskManager {
    * List artifacts for a task
    */
   listArtifacts(taskId: string): Artifact[] {
+    this.restoreState();
     return this.taskArtifacts.get(taskId) || [];
   }
 
   listTasks(input: ListTasksInput = {}): TaskSummary[] {
+    this.restoreState();
     const limit = input.limit && input.limit > 0 ? input.limit : 50;
     return Array.from(this.tasks.values())
       .filter((task) => !input.status || task.status === input.status)
@@ -231,6 +288,7 @@ export class TaskManager {
   }
 
   listPermissionRequests(input: ListPermissionRequestsInput = {}): PermissionRequest[] {
+    this.restoreState();
     return Array.from(this.permissionRequests.values())
       .filter((request) => !input.status || request.status === input.status)
       .filter((request) => !input.taskId || request.taskId === input.taskId)
@@ -286,11 +344,11 @@ export class TaskManager {
 
     const executorConfig = this.executor.getConfig();
     checks.push({
-      name: 'Codex executor command',
+      name: `${executorConfig.agent || 'Codex'} executor command`,
       status: executorConfig.enabled ? 'pass' as const : 'warn' as const,
       message: executorConfig.enabled
         ? `${executorConfig.command} ${executorConfig.argsTemplate || ''}`.trim()
-        : 'Not configured. Set CODEX_EXECUTOR_COMMAND to enable automatic execution.'
+        : 'Not configured. Set EXECUTOR_COMMAND to enable automatic execution.'
     });
 
     // Check platform
@@ -320,7 +378,7 @@ export class TaskManager {
    */
   updateTaskStatus(taskId: string, status: TaskStatus, error?: string): void {
     const task = this.tasks.get(taskId);
-    if (!task) return;
+    if (!task || task.status === 'cancelled') return;
 
     const now = new Date().toISOString();
     task.status = status;
@@ -334,8 +392,8 @@ export class TaskManager {
       task.error = error;
     }
 
-    this.addLog(taskId, status === 'completed' ? 'info' : 'error',
-      status === 'completed' ? 'Task completed successfully' : `Task failed: ${error}`);
+    this.addLog(taskId, status === 'failed' ? 'error' : 'info',
+      status === 'failed' ? `Task failed: ${error}` : `Task status: ${status}`);
   }
 
   /**
@@ -347,9 +405,11 @@ export class TaskManager {
       const existingIndex = artifacts.findIndex((item) => item.path === artifact.path);
       if (existingIndex >= 0) {
         artifacts[existingIndex] = artifact;
+        this.persistState(taskId);
         return;
       }
       artifacts.push(artifact);
+      this.persistState(taskId);
     }
   }
 
@@ -358,6 +418,7 @@ export class TaskManager {
    */
   setResultReport(taskId: string, report: ResultReport): void {
     this.taskReports.set(taskId, report);
+    this.persistState(taskId);
   }
 
   attachExecutor(taskId: string, executor: Task['executor']): void {
@@ -365,6 +426,7 @@ export class TaskManager {
     if (!task) return;
     task.executor = executor;
     task.updatedAt = new Date().toISOString();
+    this.persistState(taskId);
   }
 
   /**
@@ -379,6 +441,7 @@ export class TaskManager {
         level,
         message,
       });
+      this.persistState(taskId);
     }
   }
 
@@ -386,6 +449,7 @@ export class TaskManager {
     const sink: TaskEventSink = {
       log: (taskId, level, message) => this.addLog(taskId, level, message),
       complete: (taskId, report) => {
+        if (this.tasks.get(taskId)?.status === 'cancelled') return;
         this.setResultReport(taskId, report);
         this.updateTaskStatus(taskId, 'completed');
       },
@@ -409,13 +473,14 @@ export class TaskManager {
   }
 
   private resolveProjectRoot(projectRoot?: string): string {
-    if (!projectRoot) return this.sandboxRoot;
-    const resolved = path.resolve(projectRoot);
-    const relative = path.relative(this.sandboxRoot, resolved);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    const resolved = path.resolve(projectRoot || this.sandboxRoot);
+    const root = realpathSync(this.sandboxRoot);
+    const project = realpathSync(resolved);
+    const relative = path.relative(root, project);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
       throw new Error(`projectRoot must be inside SANDBOX_ROOT: ${this.sandboxRoot}`);
     }
-    return resolved;
+    return project;
   }
 
   private toTaskSummary(task: Task): TaskSummary {
@@ -439,7 +504,7 @@ export class TaskManager {
   private retryTaskWithPermission(parentTask: Task, sandbox: SandboxMode, autoStart: boolean = true): Task {
     const retryInput: SubmitTaskInput = {
       prompt: [
-        'Retry after TRAE approved a broader permission request.',
+        'Retry after the user approved a broader permission request.',
         '',
         'Original task:',
         parentTask.prompt,
@@ -512,7 +577,14 @@ export class TaskManager {
       .map((line) => line.trim())
       .filter(Boolean);
     const interesting = lines.find((line) => this.looksLikePermissionFailure(line));
-    return interesting || 'Codex failed with a message that appears related to sandbox or permission restrictions.';
+    return interesting || 'Executor failed with a message that appears related to sandbox or permission restrictions.';
+  }
+
+  shutdown(): void {
+    for (const taskId of this.ownedTasks) {
+      const task = this.tasks.get(taskId);
+      if (task && (task.status === 'running' || task.status === 'pending')) this.cancelTask(taskId);
+    }
   }
 
   /**

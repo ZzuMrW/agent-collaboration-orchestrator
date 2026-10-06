@@ -4,6 +4,45 @@ This project is intended to be configured in TRAE Work as an MCP server.
 
 TRAE receives the user's project-level instruction first. TRAE then analyzes the project, completes simple work directly, and delegates difficult subtasks to Codex through this bridge.
 
+## Codex leads / TRAE executes (Linux or WSL)
+
+Build the bridge, then run `node scripts/install-local.cjs` to install the launcher, MCP entry, and Codex skill. You can pass explicit Codex home directories; see `docs/codex-trae-local.md`.
+
+Example launcher settings follow. `/home/user` is a fictional home directory; replace it and the workspace with your actual absolute paths.
+
+```text
+EXECUTOR_AGENT=TRAE
+ORCHESTRATOR_AGENT=Codex
+EXECUTOR_COMMAND=/home/user/.local/bin/traex
+EXECUTOR_ARGS=--ask-for-approval never exec --cd {projectRoot} --sandbox {sandbox} --color never --output-last-message {resultFile} -
+SANDBOX_ROOT=/home/user/workspace
+BRIDGE_STATE_DIR=/home/user/.local/state/agent-collaboration-orchestrator/tasks
+```
+
+Codex configuration:
+
+```toml
+[mcp_servers.trae-task-bridge]
+command = "/home/user/.local/bin/trae-task-bridge"
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+default_tools_approval_mode = "writes"
+
+[mcp_servers.trae-task-bridge.tools.submit_task]
+approval_mode = "approve"
+
+[mcp_servers.trae-task-bridge.tools.request_revision]
+approval_mode = "approve"
+
+[mcp_servers.trae-task-bridge.tools.cancel_task]
+approval_mode = "approve"
+
+[mcp_servers.trae-task-bridge.tools.resolve_permission_request]
+approval_mode = "prompt"
+```
+
+Read tools are marked read-only. Normal delegation and cancellation are enabled for the authorized local collaboration workflow; sandbox escalation stays explicit. Reopen the Codex chat after installation. The original direction follows below.
+
 ## Basic Configuration
 
 ```json
