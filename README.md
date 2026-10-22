@@ -4,6 +4,26 @@
 
 桥接器通过 MCP 接收任务，启动本地 CLI 子进程，在共享项目中修改代码，并返回状态、日志、文件清单和最终回复。它不会控制已有的桌面聊天窗口。
 
+## 只读查看 TRAE 执行输出
+
+Node.js >= 18 即可使用，不需要连接 MCP，也不会启动、暂停、取消或重启执行器。
+
+```bash
+# 仓库内直接使用
+node scripts/watch-task.cjs --list
+node scripts/watch-task.cjs --task <task-id> --follow
+node scripts/watch-task.cjs --latest --project-root /path/to/project --follow
+
+# install-local 安装后也可使用
+trae-task-watch --latest --project-root /path/to/project --follow
+```
+
+新开一个终端运行，Ctrl+C 只退出查看。`--latest --follow` 会切换到同一项目新下发的任务；需要固定任务时使用 `--task`。任务结束后查看窗口保持打开，等待后续输出或新任务。
+
+默认读取 `BRIDGE_STATE_DIR`，未设置时读取 `~/.local/state/agent-collaboration-orchestrator/tasks`；可用 `--state-dir PATH` 指定桥接器实际使用的目录。`--tail 20` 控制首次显示的日志条数，`--poll-ms 1000` 控制轮询间隔。时间沿用桥接日志的 ISO/UTC 格式。状态尚未落盘时 `--follow` 会等待，临时不完整的快照会重试；查看器不会修改状态文件或将旧的 running 记录标成 failed。
+
+安装进 skill 的 `scripts/watch-task.cjs` 可脱离仓库直接运行。查看的是桥接器已捕获的命令和输出，不包含独立的 TRAE 桌面 UI，也不会补出执行器尚未输出的内容。查看器只读文件，仍有少量轮询读开销；需要降低频率时可增加 `--poll-ms`。
+
 ## Codex 主导、TRAE 执行：Linux / WSL 安装
 
 要求 Node.js >= 18、已登录且支持 `exec` 的 TRAE CLI。Linux / WSL 下执行：

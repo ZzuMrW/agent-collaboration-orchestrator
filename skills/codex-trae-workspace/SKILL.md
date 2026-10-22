@@ -1,6 +1,6 @@
 ---
 name: codex-trae-workspace
-description: Let Codex plan and review development work while delegating implementation to the local TRAE CLI through the trae-task-bridge MCP server. Use for requests to have Codex lead and TRAE execute.
+description: Let Codex plan and review development work while delegating implementation to the local TRAE CLI through the trae-task-bridge MCP server. Use for requests to have Codex lead and TRAE execute, or to view captured TRAE task output without affecting execution.
 ---
 
 # Codex leads, TRAE executes
@@ -18,3 +18,17 @@ Avoid simultaneous writes to the same files by Codex and TRAE. Do not ask TRAE t
 For permission failures inspect `list_permission_requests`. Approve a broader sandbox only within explicit user authorization; otherwise narrow the task or report the blocked step. Do not include credentials in prompts.
 
 If MCP tools are missing, explain that the user should reopen the chat or restart Codex after installation. Do not silently replace a requested delegation with direct implementation. The default local launcher is `$HOME/.local/bin/trae-task-bridge`; use the installed MCP configuration to resolve its actual path. The fallback `scripts/run-task.cjs` in the bridge repository keeps an MCP client alive through completion and exercises the same tools.
+
+## Read-only task output viewer
+
+When the user wants to see TRAE output, offer the bundled `scripts/watch-task.cjs` (Node.js >= 18), or the installed `trae-task-watch` command:
+
+```bash
+trae-task-watch --list
+trae-task-watch --task <task-id> --follow
+trae-task-watch --latest --project-root /path/to/project --follow
+```
+
+Use `--state-dir PATH` if the bridge has a custom `BRIDGE_STATE_DIR`. Without the launcher, run `node <skill-directory>/scripts/watch-task.cjs` with the same options. `--latest --follow` switches to newer matching tasks, so use `--project-root` to avoid following another project. `--task` pins a single task; Ctrl+C exits only the viewer.
+
+This viewer only reads persisted snapshots. It must not start an MCP server, instantiate TaskManager, update stale task status, or send signals to the executor. It shows captured output, not a separate view of the TRAE desktop. If persistence is unavailable, explain the missing state directory rather than starting or restarting the bridge to obtain logs.
